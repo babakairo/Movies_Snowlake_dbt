@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: bronze_movies_raw
+    description: >
+      Deduplicated Bronze landing table for TMDb movie data. Each row represents
+      the most recently ingested version of a movie from the TMDb API.
+      RAW_DATA contains the complete original JSON response — no fields removed,
+      no types changed, no cleaning applied. Silver models parse this VARIANT column.
+    columns:
+      - name: movie_id
+        description: TMDb numeric movie ID — primary key after deduplication
+        tests:
+          - not_null
+          - unique
+
+      - name: raw_data
+        description: Complete TMDb /movie/{id} JSON response as Snowflake VARIANT
+        tests:
+          - not_null
+
+      - name: ingested_at
+        description: UTC timestamp of when this row was loaded by the Python pipeline
+        tests:
+          - not_null
+
+      - name: ingestion_date
+        description: Calendar date derived from ingested_at — used for partitioning
+        tests:
+          - not_null
+
+      - name: batch_id
+        description: UUID of the pipeline run that loaded this row
+
+      - name: row_hash
+        description: MD5 hash of raw_data — used to detect upstream data changes

@@ -1,0 +1,9 @@
+
+# dbt user-specific files
+dbt_project/.user.yml
+
+# Logs
+logs/
+
+# Claude Code internal
+.claude/

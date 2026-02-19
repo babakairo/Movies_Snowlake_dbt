@@ -1,0 +1,57 @@
+# =============================================================================
+# profiles.yml — Snowflake Connection Profiles
+# =============================================================================
+# TEACHING NOTE:
+#   profiles.yml lives in ~/.dbt/profiles.yml (your HOME directory, NOT the project).
+#   This is intentional — it keeps credentials out of version control.
+#   The project's dbt_project.yml references the profile by NAME ("movies_platform").
+#
+#   Copy this file to ~/.dbt/profiles.yml and fill in your actual credentials.
+#   NEVER commit this file with real passwords to Git.
+#
+#   Environments (targets):
+#     dev:  individual developer sandbox — uses a personal schema so devs
+#           don't overwrite each other's work
+#     prod: production run — writes to the real BRONZE/SILVER/GOLD schemas
+#
+#   dbt uses `target: dev` by default.
+#   Override with: dbt run --target prod
+# =============================================================================
+
+movies_platform:
+  target: dev   # Default target when none specified
+
+  outputs:
+
+    # ── Development Environment ───────────────────────────────────────────────
+    # TEACHING NOTE:
+    #   Each developer uses their own schema (e.g., DEV_JOHN_BRONZE).
+    #   This prevents one developer's experiments from breaking another's queries.
+    #   The {{ env_var() }} function reads environment variables at dbt runtime.
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'DE_ROLE') }}"
+      database: LECTURE_DE
+      warehouse: LECTURE_TRANSFORM_WH
+      schema: DBT_DEV          # dbt dev models land here by default
+      threads: 4               # Run up to 4 models in parallel
+      client_session_keep_alive: false
+      query_tag: dbt_dev_run
+
+    # ── Production Environment ────────────────────────────────────────────────
+    # Run with: dbt run --target prod
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: DE_ROLE
+      database: LECTURE_DE
+      warehouse: LECTURE_TRANSFORM_WH
+      schema: DBT_PROD         # Overridden per-model by generate_schema_name macro
+      threads: 8               # More parallelism in prod
+      client_session_keep_alive: false
+      query_tag: dbt_prod_run

@@ -1,0 +1,149 @@
+version: 2
+
+models:
+  - name: silver_movies
+    description: >
+      Cleansed and typed movie records parsed from the Bronze VARIANT column.
+      One row per movie. Budget/revenue zeros are treated as NULL (TMDb convention).
+      Incremental — new rows merged on movie_id on each dbt run.
+    columns:
+      - name: movie_id
+        description: TMDb numeric movie ID — primary key
+        tests:
+          - not_null
+          - unique
+
+      - name: title
+        description: English release title of the movie
+        tests:
+          - not_null
+
+      - name: release_date
+        description: Official theatrical release date (NULL for unreleased films)
+
+      - name: release_year
+        description: Calendar year extracted from release_date
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 1888
+                max_value: 2030
+                row_condition: "release_year is not null"
+
+      - name: budget_usd
+        description: Production budget in USD — NULL if not reported (TMDb uses 0 for unknown)
+
+      - name: revenue_usd
+        description: Worldwide box office revenue in USD — NULL if not reported
+
+      - name: runtime_minutes
+        description: Film runtime in minutes — NULL if not known
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 1
+                max_value: 600
+                row_condition: "runtime_minutes is not null"
+
+      - name: vote_average
+        description: TMDb community average rating on a 0-10 scale
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                max_value: 10
+                row_condition: "vote_average is not null"
+
+      - name: roi_pct
+        description: >
+          Return on investment percentage: (revenue - budget) / budget * 100.
+          NULL when budget or revenue is not reported.
+
+      - name: _data_source
+        description: Source system identifier for lineage tracking
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['TMDb API v3']
+
+  - name: silver_genres
+    description: >
+      Reference dimension of TMDb movie genres. Loaded from the most recent
+      RAW_GENRES snapshot. Genres rarely change — ~19 genres total.
+    columns:
+      - name: genre_id
+        description: TMDb genre ID — primary key
+        tests:
+          - not_null
+          - unique
+
+      - name: genre_name
+        description: Genre display name in UPPER CASE
+        tests:
+          - not_null
+          - unique
+
+  - name: silver_movie_genres
+    description: >
+      Bridge table mapping movies to their genres. One row per movie-genre
+      combination. A movie with 3 genres has 3 rows in this table.
+    columns:
+      - name: movie_id
+        description: FK to silver_movies
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_movies')
+                field: movie_id
+
+      - name: genre_id
+        description: FK to silver_genres
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_genres')
+                field: genre_id
+
+  - name: silver_production_companies
+    description: >
+      Reference dimension of unique production companies extracted from movie
+      JSON arrays. One row per company_id. Multiple movies may share a company.
+    columns:
+      - name: company_id
+        description: TMDb company ID — primary key
+        tests:
+          - not_null
+          - unique
+
+      - name: company_name
+        description: Production company name
+        tests:
+          - not_null
+
+      - name: origin_country
+        description: ISO 3166-1 alpha-2 country code (e.g., US, GB, JP)
+
+  - name: silver_movie_companies
+    description: >
+      Bridge table mapping movies to their production companies. One row per
+      movie-company combination. is_primary_company=true marks the first-listed
+      (index 0) company in the TMDb production_companies array.
+    columns:
+      - name: movie_id
+        description: TMDb movie ID
+        tests:
+          - not_null
+
+      - name: company_id
+        description: TMDb company ID
+        tests:
+          - not_null
+
+      - name: company_position
+        description: Zero-based position in the production_companies array
+
+      - name: is_primary_company
+        description: True for the first company listed (position = 0)

@@ -1,0 +1,80 @@
+# =============================================================================
+# sources.yml — Source Table Definitions
+# =============================================================================
+# TEACHING NOTE:
+#   A "source" in dbt is a table that dbt did NOT create — it was loaded
+#   externally (by our Python pipeline, a Fivetran connector, etc.).
+#
+#   Why define sources?
+#     1. Lineage: dbt understands your full data lineage graph, from source to Gold
+#     2. Freshness checks: dbt can alert if source data stops arriving
+#     3. Documentation: generates data catalog entries automatically
+#     4. Testing: you can run source tests (not_null, unique) on raw data
+#
+#   Use {{ source('raw_ingestion', 'raw_movies') }} in models to reference these.
+#   This is BETTER than hardcoding the full table path, because:
+#     - If the table moves, you change it in ONE place (here)
+#     - dbt draws the dependency arrow in the DAG correctly
+# =============================================================================
+
+version: 2
+
+sources:
+  - name: raw_ingestion           # logical name — used in {{ source() }} calls
+    database: LECTURE_DE
+    schema: BRONZE
+    description: >
+      Raw landing zone for TMDb API data. Tables are populated by the Python
+      ingestion pipeline (src/main.py). Data is stored as VARIANT (JSON) with
+      minimal metadata columns for lineage tracking.
+
+    # ── Freshness Checks ────────────────────────────────────────────────────
+    # TEACHING NOTE:
+    #   freshness checks answer: "Is our data up to date?"
+    #   If the Python pipeline stops running, raw_movies won't get new rows.
+    #   dbt can detect this and alert your team — before analysts notice stale data.
+    #   Run with: dbt source freshness
+    config:
+      loaded_at_field: INGESTED_AT             # Column used to check freshness
+      freshness:
+        warn_after:  {count: 25, period: hour}   # Warning if data is >25 hours old
+        error_after: {count: 49, period: hour}   # Error if data is >49 hours old
+
+    tables:
+      - name: RAW_MOVIES
+        description: >
+          One row per TMDb movie. RAW_DATA contains the complete JSON response
+          from the /movie/{id} endpoint, including genres, production companies,
+          runtime, budget, revenue, and vote statistics.
+        columns:
+          - name: MOVIE_ID
+            description: TMDb movie ID — extracted from JSON for indexing
+            tests:
+              - not_null
+              - unique
+
+          - name: RAW_DATA
+            description: >
+              Complete TMDb /movie/{id} JSON response stored as Snowflake VARIANT.
+              Contains all fields: title, genres, budget, revenue, runtime,
+              production_companies, release_date, popularity, vote_average, etc.
+            tests:
+              - not_null
+
+          - name: INGESTED_AT
+            description: UTC timestamp when this row was loaded by the Python pipeline
+            tests:
+              - not_null
+
+          - name: BATCH_ID
+            description: UUID identifying the pipeline run that loaded this row
+
+      - name: RAW_GENRES
+        description: >
+          Complete TMDb genre reference list. One row per pipeline run,
+          stored as a JSON array in RAW_DATA.
+        columns:
+          - name: RAW_DATA
+            description: 'JSON array of genre objects — [{"id": 28, "name": "Action"}, ...]'
+            tests:
+              - not_null

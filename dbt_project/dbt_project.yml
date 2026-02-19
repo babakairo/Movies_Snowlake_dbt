@@ -1,0 +1,116 @@
+# =============================================================================
+# dbt_project.yml — dbt Project Configuration
+# =============================================================================
+# TEACHING NOTE:
+#   This is dbt's "manifest" file. It defines:
+#     1. Project name and paths (where to find models, tests, etc.)
+#     2. Default materialization strategies per layer
+#     3. Model-level variable overrides
+#
+#   The most important concept here is MATERIALIZATION:
+#     - view:        dbt creates a SQL VIEW (no data stored; re-queries source every time)
+#     - table:       dbt creates a TABLE (data physically stored; faster to query)
+#     - incremental: dbt only inserts NEW rows on each run (efficient for large tables)
+#     - ephemeral:   dbt inlines the SQL as a CTE (no Snowflake object created)
+#
+#   Best practice per layer:
+#     Bronze  → table (raw data, needs to persist; queried by Silver)
+#     Silver  → incremental (grows over time; don't re-process historical data)
+#     Gold    → table (BI tools need fast, pre-materialized data)
+#     KPI     → table (small, aggregated; always fast)
+# =============================================================================
+
+name: movies_platform
+version: '1.0.0'
+config-version: 2
+
+# This setting configures which "profile" dbt uses for this project.
+# The profile defines HOW to connect to Snowflake (see profiles.yml).
+profile: movies_platform
+
+# These are the paths dbt looks in for different asset types.
+# Changing defaults is unusual — match these to your actual folder structure.
+model-paths:       ["models"]
+analysis-paths:    ["analyses"]
+test-paths:        ["tests"]
+seed-paths:        ["seeds"]
+macro-paths:       ["macros"]
+snapshot-paths:    ["snapshots"]
+
+# Where dbt writes compiled SQL files (useful for debugging)
+target-path: "target"
+
+# Where dbt caches package downloads
+packages-install-path: "dbt_packages"
+
+# Files/folders dbt ignores when looking for models
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# =============================================================================
+# Variables — reusable values across models
+# =============================================================================
+# TEACHING NOTE:
+#   Use vars for values that change between environments (dev vs. prod)
+#   or that you want to make configurable without editing SQL.
+vars:
+  # How far back to look for "new" data in incremental models
+  incremental_lookback_days: 3
+  # Default start date for the date dimension
+  date_spine_start: '2000-01-01'
+  date_spine_end: '2030-12-31'
+
+# =============================================================================
+# Model Configuration — per-folder defaults
+# =============================================================================
+models:
+  movies_platform:
+
+    # ── Bronze Layer ──────────────────────────────────────────────────────────
+    # TEACHING NOTE:
+    #   Bronze models are TABLES because:
+    #     - They are the source of truth for Silver; Silver models ref() Bronze
+    #     - If Bronze were views, every Silver query would re-read raw Snowflake tables
+    #     - We want the raw JSON to be "frozen" at the time of ingestion
+    #   We tag them "bronze" for documentation and governance filtering.
+    bronze:
+      +materialized: table
+      +schema: BRONZE
+      +tags: ["bronze", "raw"]
+
+    # ── Silver Layer ──────────────────────────────────────────────────────────
+    # TEACHING NOTE:
+    #   Silver models are INCREMENTAL because:
+    #     - Over weeks/months, you'll have millions of movies
+    #     - Re-processing all history on every dbt run is wasteful
+    #     - Incremental models append only rows where ingested_at > last run
+    #   unique_key tells dbt how to identify "the same row" for upserts.
+    silver:
+      +materialized: incremental
+      +schema: SILVER
+      +tags: ["silver", "cleansed"]
+      +incremental_strategy: merge
+
+    # ── Gold Layer ─────────────────────────────────────────────────────────────
+    # TEACHING NOTE:
+    #   Gold tables are read by BI tools (Tableau, Looker, Power BI).
+    #   They should always be fully-materialized tables — views are too slow
+    #   when a dashboard runs a complex join on VARIANT columns.
+    gold:
+      +materialized: table
+      +schema: GOLD
+      +tags: ["gold", "analytics"]
+
+# =============================================================================
+# Seeds configuration — static reference data loaded from CSV
+# =============================================================================
+seeds:
+  movies_platform:
+    budget_tiers:
+      +schema: GOLD
+      +column_types:
+        tier_name:       varchar
+        min_budget_usd:  number
+        max_budget_usd:  number
+        tier_rank:       number
