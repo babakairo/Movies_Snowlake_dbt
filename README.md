@@ -1,9 +1,6 @@
 # Modern Data Engineering Platform
 ### TMDb Movie Analytics — Medallion Architecture with Snowflake + dbt + Python
 
-> **Teaching-ready project** demonstrating Bronze → Silver → Gold data pipeline
-> using industry best practices. Every decision is documented with teaching notes.
-
 ---
 
 ## Dataset: The Movie Database (TMDb)
@@ -152,9 +149,6 @@ In Snowflake's web UI (or SnowSQL CLI), run these files in order:
 -- Creates: roles, users, grants
 ```
 
-> **Teaching tip:** Walk students through each SQL block and explain WHY
-> each step exists before running it. Setup SQL is where architectural
-> decisions become visible.
 
 ---
 
@@ -479,7 +473,7 @@ Once Gold is built, students can answer real analytical questions:
 
 ---
 
-## Next Steps for Students
+## Next Steps 
 
 After completing this project, explore these advanced topics:
 
