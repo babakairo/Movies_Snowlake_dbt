@@ -1,0 +1,39 @@
+# =============================================================================
+# Dagster Orchestration Requirements
+# =============================================================================
+# TEACHING NOTE:
+#   Install these in your virtual environment:
+#     cd orchestration/
+#     pip install -r requirements.txt
+#
+#   Or add to your existing .venv:
+#     pip install dagster dagster-webserver dagster-dbt dagster-snowflake
+#
+# VERSION NOTES:
+#   - dagster + dagster-dbt must be on the SAME version (they're tightly coupled)
+#   - dagster-snowflake is optional — only needed if you add Snowflake resources
+#   - Use >= so you can upgrade patch versions without editing this file
+# =============================================================================
+
+# Core Dagster orchestration engine
+dagster>=1.7.0,<2.0.0
+
+# Dagster web UI (run `dagster dev` to start at localhost:3000)
+dagster-webserver>=1.7.0,<2.0.0
+
+# dbt integration — auto-discovers assets from dbt project
+dagster-dbt>=0.23.0,<1.0.0
+
+# Snowflake IO Manager (optional — for reading/writing Snowflake tables as assets)
+# dagster-snowflake>=0.23.0,<1.0.0
+
+# dbt-snowflake adapter (same version used in your dbt project)
+dbt-snowflake>=1.7.0,<2.0.0
+
+# Load .env file at startup so dbt parse can find Snowflake credentials.
+# TEACHING NOTE:
+#   python-dotenv is standard for local development -- it reads a .env file
+#   and injects the values into os.environ before your application code runs.
+#   The pipeline file wraps the import in try/except so it degrades gracefully
+#   if this package is not installed (relying on shell env vars instead).
+python-dotenv>=1.0.0

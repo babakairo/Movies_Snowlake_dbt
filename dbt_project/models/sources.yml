@@ -1,8 +1,8 @@
 # =============================================================================
-# sources.yml — Source Table Definitions
+# sources.yml -- Source Table Definitions
 # =============================================================================
 # TEACHING NOTE:
-#   A "source" in dbt is a table that dbt did NOT create — it was loaded
+#   A "source" in dbt is a table that dbt did NOT create -- it was loaded
 #   externally (by our Python pipeline, a Fivetran connector, etc.).
 #
 #   Why define sources?
@@ -20,7 +20,7 @@
 version: 2
 
 sources:
-  - name: raw_ingestion           # logical name — used in {{ source() }} calls
+  - name: raw_ingestion           # logical name -- used in {{ source() }} calls
     database: LECTURE_DE
     schema: BRONZE
     description: >
@@ -28,11 +28,11 @@ sources:
       ingestion pipeline (src/main.py). Data is stored as VARIANT (JSON) with
       minimal metadata columns for lineage tracking.
 
-    # ── Freshness Checks ────────────────────────────────────────────────────
+    # -- Freshness Checks ----------------------------------------------------
     # TEACHING NOTE:
     #   freshness checks answer: "Is our data up to date?"
     #   If the Python pipeline stops running, raw_movies won't get new rows.
-    #   dbt can detect this and alert your team — before analysts notice stale data.
+    #   dbt can detect this and alert your team -- before analysts notice stale data.
     #   Run with: dbt source freshness
     config:
       loaded_at_field: INGESTED_AT             # Column used to check freshness
@@ -48,7 +48,7 @@ sources:
           runtime, budget, revenue, and vote statistics.
         columns:
           - name: MOVIE_ID
-            description: TMDb movie ID — extracted from JSON for indexing
+            description: TMDb movie ID -- extracted from JSON for indexing
             tests:
               - not_null
               - unique
@@ -75,6 +75,6 @@ sources:
           stored as a JSON array in RAW_DATA.
         columns:
           - name: RAW_DATA
-            description: 'JSON array of genre objects — [{"id": 28, "name": "Action"}, ...]'
+            description: 'JSON array of genre objects -- [{"id": 28, "name": "Action"}, ...]'
             tests:
               - not_null

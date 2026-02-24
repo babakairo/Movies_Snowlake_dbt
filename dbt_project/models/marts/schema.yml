@@ -1,0 +1,227 @@
+version: 2
+
+# =============================================================================
+# TEACHING NOTE -- Marts Layer Schema Tests
+# =============================================================================
+# The marts layer is the business-facing layer built on top of gold.
+# Tests here validate AGGREGATE behaviour, not individual row quality.
+#
+# Types of tests in this file:
+#   1. not_null / unique      -- same as other layers
+#   2. dbt_expectations       -- row counts, statistical ranges, distributions
+#   3. relationships          -- FK integrity back to gold dims
+#
+# dbt_expectations tests used here:
+#   expect_table_row_count_to_be_between   -> sanity-check aggregate row counts
+#   expect_column_values_to_be_between     -> validate aggregated metric ranges
+#   expect_column_values_to_not_be_null    -> extended null checks
+# =============================================================================
+
+models:
+
+  # -- kpi_genre_performance --------------------------------------------------
+  - name: kpi_genre_performance
+    description: >
+      Pre-aggregated genre performance KPI mart. One row per genre.
+      Sits in the MARTS layer above gold star schema.
+      Used by dashboards showing "Genre Revenue Comparison" and "ROI by Genre".
+
+    tests:
+      # TEACHING: Table-level tests (applied to the whole model, not one column)
+      # Genres rarely change -- we expect ~19 TMDb genres
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 5
+          max_value: 30
+
+    columns:
+      - name: genre_name
+        description: Genre display name (from dim_genres)
+        tests:
+          - not_null
+          - unique
+
+      - name: genre_sk
+        description: Surrogate key -- FK to dim_genres
+        tests:
+          - not_null
+
+      - name: total_movies
+        description: Total number of movies in this genre (including those without financials)
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 100000
+              row_condition: "total_movies is not null"
+
+      - name: avg_roi_pct
+        description: Average return on investment across financially complete movies in this genre
+        tests:
+          # ROI can be negative (loss-making genres) or very high (low-budget hits)
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -100
+              max_value: 100000
+              row_condition: "avg_roi_pct is not null"
+
+      - name: avg_rating
+        description: Average TMDb rating across all movies in this genre
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 10
+              row_condition: "avg_rating is not null"
+
+      - name: roi_rank
+        description: Genre ranked by average ROI (1 = highest ROI genre)
+        tests:
+          - not_null
+
+      - name: revenue_rank
+        description: Genre ranked by total revenue (1 = highest-grossing genre)
+        tests:
+          - not_null
+
+      - name: total_revenue_millions
+        description: Sum of all revenue across financially complete movies (USD millions)
+        tests:
+          # Revenue must be non-negative
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 1000000
+              row_condition: "total_revenue_millions is not null"
+
+  # -- kpi_yearly_trends ------------------------------------------------------
+  - name: kpi_yearly_trends
+    description: >
+      Year-over-year movie industry trends from 1980 to present.
+      One row per release year. Includes YoY delta columns for trend analysis.
+      Built from fact_movies. Demonstrates LAG() window function for time series.
+
+    tests:
+      # Should have one row per year from 1980 to current year
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 20
+          max_value: 100
+
+    columns:
+      - name: release_year
+        description: Four-digit release year (1980 to present)
+        tests:
+          - not_null
+          - unique
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1980
+              max_value: 2030
+
+      - name: total_movies_released
+        description: Total movies released in this year
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 50000
+
+      - name: avg_rating
+        description: Average TMDb rating for movies released this year
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 10
+              row_condition: "avg_rating is not null"
+
+      - name: avg_roi_pct
+        description: Average ROI percentage for movies with known financials this year
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -100
+              max_value: 100000
+              row_condition: "avg_roi_pct is not null"
+
+  # -- kpi_top_movies ---------------------------------------------------------
+  - name: kpi_top_movies
+    description: >
+      Top movies with multi-dimensional rankings -- revenue, ROI, rating, popularity.
+      One row per movie with vote_count >= 100 (statistically meaningful filter).
+      Joins genres and companies for display labels.
+      Demonstrates DENSE_RANK(), PERCENT_RANK(), and NTILE() window functions.
+
+    tests:
+      # Should have at least some well-voted movies
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 100
+          max_value: 1000000
+
+    columns:
+      - name: movie_sk
+        description: Surrogate key -- matches fact_movies.movie_sk
+        tests:
+          - not_null
+          - unique
+
+      - name: movie_id
+        description: TMDb natural movie ID
+        tests:
+          - not_null
+          - unique
+
+      - name: title
+        description: Movie title
+        tests:
+          - not_null
+
+      - name: vote_average
+        description: Average TMDb rating (0-10)
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 10
+
+      - name: vote_count
+        description: Number of TMDb votes -- filtered to >= 100
+        tests:
+          - not_null
+          # TEACHING: This test validates our vote_count >= 100 filter works
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 100
+              max_value: 10000000
+
+      - name: revenue_rank_all_time
+        description: All-time revenue rank (1 = highest-grossing movie ever)
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 1000000
+
+      - name: rating_decile
+        description: "Rating decile bucket: 1=bottom 10%, 10=top 10%"
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 10
+
+      - name: revenue_decile
+        description: "Revenue decile bucket: 1=bottom 10%, 10=top 10%"
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 10
+
+      - name: revenue_percentile
+        description: Revenue percentile score (0.0=bottom, 1.0=top)
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0.0
+              max_value: 1.0
+              row_condition: "revenue_percentile is not null"
+
+      - name: rating_percentile
+        description: Rating percentile score (0.0=bottom, 1.0=top)
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0.0
+              max_value: 1.0
+              row_condition: "rating_percentile is not null"

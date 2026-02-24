@@ -1,37 +1,55 @@
+
 {{
     config(
         materialized = 'table',
         schema       = 'GOLD',
-        tags         = ['gold', 'kpi', 'mart']
+        tags         = ['gold', 'marts', 'kpi']
     )
 }}
 
 /*
 =============================================================================
   MODEL: kpi_top_movies
-  LAYER: Gold (KPI Mart)
+  LAYER: Marts (Business-Facing KPI Layer)
   SOURCE: {{ ref('fact_movies') }}, {{ ref('dim_genres') }},
           {{ ref('dim_production_companies') }}
 =============================================================================
-TEACHING NOTE — Multi-Metric Rankings:
+TEACHING NOTE — Multi-Metric Rankings and Window Functions
 
-  Different stakeholders define "top" differently:
-    CFO:      Top by total revenue (raw box office performance)
-    Investor: Top by ROI (return on investment — efficiency)
-    Critic:   Top by vote average (quality)
-    Marketer: Top by popularity score (audience engagement)
+  FOUR RANKING FUNCTIONS IN SQL:
+  ─────────────────────────────────────────────────────────────────────────
+  RANK()         → Gaps after ties:          1, 2, 2, 4, 5   (no #3)
+  DENSE_RANK()   → No gaps after ties:       1, 2, 2, 3, 4   (we use this)
+  ROW_NUMBER()   → Unique sequential rank:   1, 2, 3, 4, 5   (arbitrary tiebreak)
+  NTILE(n)       → Divides into n buckets:   10 buckets → deciles
 
-  This mart provides ALL rankings in one place using:
-    DENSE_RANK() — like RANK() but no gaps (1,2,3,3,4 vs 1,2,3,3,5)
-    PERCENT_RANK() — relative rank as a percentile (0.0 to 1.0)
-    NTILE(10) — divides into deciles (1=bottom 10%, 10=top 10%)
+  PERCENT_RANK() → Relative rank 0.0–1.0
+    = (rank - 1) / (total_rows - 1)
+    Score of 0.90 means "better than 90% of movies"
 
-  The movie joins to genre and company for display attributes —
-  a common pattern: fact contains FKs, dims contain labels.
+  WHY DENSE_RANK FOR MOVIES?
+    If Avengers and Titanic BOTH have the highest revenue:
+      RANK()       → Both get rank 1, next movie gets rank 3 (skips 2)
+      DENSE_RANK() → Both get rank 1, next movie gets rank 2 (no gap)
+    Dense rank is more intuitive for "Top 10 movies" use cases.
 
-  TEACHING: Never store display labels (genre_name) in the fact table.
-  Always join to the dimension at query time.
-  This ensures consistency — one change in dim_genres propagates everywhere.
+  THE VOTE_COUNT >= 100 FILTER:
+  ─────────────────────────────────────────────────────────────────────────
+  A movie with 5 votes and a 10/10 rating is NOT "the top rated movie".
+  The 100-vote minimum ensures statistical meaningfulness.
+
+  This is the "Bayesian average" concept — ratings from many voters
+  are more trustworthy than ratings from few voters.
+
+  In production, a weighted rating (like IMDb's formula) would be even better:
+    Weighted = (v/(v+m)) × R + (m/(v+m)) × C
+    Where: v=vote_count, m=min_votes, R=avg_rating, C=mean_rating_overall
+
+  This model answers (by stakeholder):
+    CFO:      Top by revenue (raw box office performance)
+    Investor: Top by ROI (return on investment efficiency)
+    Critic:   Top by vote_average (quality consensus)
+    Marketer: Top by popularity_score (audience engagement momentum)
 =============================================================================
 */
 
@@ -125,7 +143,8 @@ enriched as (
         ntile(10) over (order by f.revenue_usd      asc nulls first) as revenue_decile,
 
         -- ── Metadata ─────────────────────────────────────────────────────────
-        f._gold_loaded_at
+        f._gold_loaded_at,
+        current_timestamp()                     as _marts_loaded_at
 
     from fact f
     left join genres g   on f.genre_sk   = g.genre_sk

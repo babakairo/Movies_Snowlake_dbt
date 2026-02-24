@@ -1,38 +1,53 @@
+
 {{
     config(
         materialized = 'table',
         schema       = 'GOLD',
-        tags         = ['gold', 'kpi', 'mart']
+        tags         = ['gold', 'marts', 'kpi']
     )
 }}
 
 /*
 =============================================================================
   MODEL: kpi_yearly_trends
-  LAYER: Gold (KPI Mart)
+  LAYER: Marts (Business-Facing KPI Layer)
   SOURCE: {{ ref('fact_movies') }}
 =============================================================================
-TEACHING NOTE — Time Series Analysis in Data Warehousing:
+TEACHING NOTE — Time Series Analysis in Data Warehousing
 
-  Year-over-year trend analysis is one of the most common business queries.
-  This mart pre-computes it so BI tools get instant response.
+  INCREMENTAL DATA DEMO — How This Model Shows Incrementals Working:
+  ─────────────────────────────────────────────────────────────────────────
+  This model reads from fact_movies, which comes from silver_movies (incremental).
+  When you manually insert test rows into RAW_MOVIES and run the pipeline:
 
-  Key techniques demonstrated:
-    1. LAG() window function — compare current year to previous year
-    2. Conditional aggregation with FILTER — "count only summer releases"
-    3. PERCENT_RANK() — ranking within the time series
-    4. Division-by-zero protection with NULLIF()
+    Step 1: Insert rows with ingested_at = CURRENT_TIMESTAMP
+            (simulating new API ingest)
+    Step 2: dbt run --models bronze_movies_raw+
+            (bronze picks up new rows, silver merges only the new ones)
+    Step 3: dbt run --models kpi_yearly_trends
+            (trends model now includes the newly inserted movies)
 
-  LAG() explained:
-    lag(total_movies, 1) OVER (ORDER BY release_year)
-    Returns the total_movies value from ONE year ago.
-    This lets us compute YoY change without self-joins.
+  You can observe: if you insert 5 movies from 2023, the 2023 row in
+  this model should show total_movies_released += 5.
+
+  LAG() Window Function — Year-over-Year Changes:
+  ─────────────────────────────────────────────────────────────────────────
+  LAG(col, 1) OVER (ORDER BY release_year) returns the value from 1 row back.
+  This is the MOST efficient way to compute YoY changes — no self-join needed.
+
+    Self-join approach (slow):
+      SELECT a.year, a.movies - b.movies as yoy_change
+      FROM yearly a JOIN yearly b ON a.year = b.year + 1
+
+    LAG approach (fast — single table scan):
+      SELECT year, movies - LAG(movies, 1) OVER (ORDER BY year) as yoy_change
+      FROM yearly
 
   Business questions answered:
     Q: "Is the movie industry releasing more films per year than 10 years ago?"
     Q: "How has average budget changed with streaming (2015–present)?"
     Q: "Which year had the highest average ROI?"
-    Q: "Is ratings quality improving or declining?"
+    Q: "Is ratings quality improving or declining over time?"
 =============================================================================
 */
 
@@ -77,9 +92,10 @@ yearly as (
 
         -- ── Budget Tier Distribution ──────────────────────────────────────────
         count(distinct case when budget_tier = 'BLOCKBUSTER'       then movie_id end) as blockbuster_count,
-        count(distinct case when budget_tier = 'MAJOR'             then movie_id end) as major_count,
-        count(distinct case when budget_tier = 'MID'               then movie_id end) as mid_count,
-        count(distinct case when budget_tier = 'INDIE'             then movie_id end) as indie_count
+        count(distinct case when budget_tier = 'HIGH'              then movie_id end) as high_budget_count,
+        count(distinct case when budget_tier = 'MID'               then movie_id end) as mid_budget_count,
+        count(distinct case when budget_tier = 'LOW'               then movie_id end) as low_budget_count,
+        count(distinct case when budget_tier = 'MICRO'             then movie_id end) as micro_budget_count
 
     from fact
     group by release_year
@@ -108,9 +124,10 @@ with_yoy as (
         avg_popularity,
         avg_runtime_minutes,
         blockbuster_count,
-        major_count,
-        mid_count,
-        indie_count,
+        high_budget_count,
+        mid_budget_count,
+        low_budget_count,
+        micro_budget_count,
 
         -- ── Year-over-Year Changes (LAG window function) ──────────────────────
         -- LAG(col, 1) gets the value from 1 row back (previous year)
@@ -143,7 +160,7 @@ with_yoy as (
         rank() over (order by total_movies_released  desc)          as volume_rank,
         rank() over (order by avg_roi_pct            desc nulls last) as roi_rank,
 
-        current_timestamp()                                         as _gold_loaded_at
+        current_timestamp()                                         as _marts_loaded_at
 
     from yearly
 

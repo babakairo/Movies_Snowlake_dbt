@@ -1,148 +1,214 @@
 
 ================================================================================
-  MODERN DATA ENGINEERING PLATFORM — ARCHITECTURE DIAGRAM
+  MODERN DATA ENGINEERING PLATFORM -- ARCHITECTURE DIAGRAM
   Dataset: The Movie Database (TMDb) API
-  Stack:   Python · Snowflake · dbt · Medallion Architecture
+  Stack:   Python · Snowflake · dbt · Dagster · Medallion Architecture
 ================================================================================
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           DATA SOURCES                                      │
-│                                                                             │
-│   ┌──────────────────────────────────────────────┐                          │
-│   │         TMDb REST API (api.themoviedb.org)    │                          │
-│   │  • GET /movie/popular   (paginated list)      │                          │
-│   │  • GET /movie/{id}      (full movie detail)   │                          │
-│   │  • GET /genre/movie/list (genre reference)    │                          │
-│   │  Free API Key — 40 req/10s rate limit         │                          │
-│   └─────────────────────┬────────────────────────┘                          │
-└─────────────────────────┼───────────────────────────────────────────────────┘
-                          │  HTTPS/JSON
-                          ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     INGESTION LAYER  (Python)                               │
-│                                                                             │
-│   src/                                                                      │
-│   ├── config.py      ← Loads .env, validates credentials                   │
-│   ├── extract.py     ← TMDbExtractor: pagination, retry, rate-limit        │
-│   ├── load.py        ← SnowflakeLoader: connection, bulk insert            │
-│   └── main.py        ← Orchestrates extract → load pipeline                │
-│                                                                             │
-│   Key patterns: tenacity retries, structured logging, batch inserts         │
-└─────────────────────────┬───────────────────────────────────────────────────┘
-                          │  snowflake-connector-python
-                          ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    ❄  SNOWFLAKE  (LECTURE_DE database)                     │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  🥉 BRONZE SCHEMA  (Raw Ingestion Zone)                              │  │
-│  │                                                                      │  │
-│  │  RAW_MOVIES          RAW_GENRES                                      │  │
-│  │  ─────────────────   ─────────────────                               │  │
-│  │  movie_id  NUMBER    raw_data   VARIANT                              │  │
-│  │  raw_data  VARIANT   ingested_at TIMESTAMP                           │  │
-│  │  source_url VARCHAR  batch_id    VARCHAR                             │  │
-│  │  ingested_at TIMESTAMP                                               │  │
-│  │  batch_id   VARCHAR                                                  │  │
-│  │                                                                      │  │
-│  │  Purpose: Immutable landing zone. Never transform here.              │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                              │ dbt ref()                                    │
-│                              ▼                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  🥈 SILVER SCHEMA  (Cleansed & Structured)                          │  │
-│  │                                                                      │  │
-│  │  silver_movies          silver_genres                                │  │
-│  │  ─────────────────────  ──────────────────                           │  │
-│  │  movie_id  PK           genre_id  PK                                 │  │
-│  │  title                  genre_name                                   │  │
-│  │  release_date (DATE)                                                 │  │
-│  │  budget_usd             silver_movie_genres                          │  │
-│  │  revenue_usd            ──────────────────────                       │  │
-│  │  vote_average           movie_id  FK                                 │  │
-│  │  popularity             genre_id  FK                                 │  │
-│  │  runtime_minutes                                                     │  │
-│  │  original_language      silver_production_companies                  │  │
-│  │  status                 ──────────────────────────                   │  │
-│  │  _loaded_at             company_id  PK                               │  │
-│  │  _source                company_name                                 │  │
-│  │                         origin_country                               │  │
-│  │  Purpose: Type-safe, deduplicated, analytics-ready rows.             │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                              │ dbt ref()                                    │
-│                              ▼                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  🥇 GOLD SCHEMA  (Business Analytics Layer)                         │  │
-│  │                                                                      │  │
-│  │  FACTS                  DIMENSIONS                                   │  │
-│  │  ─────────────────────  ──────────────────────────                   │  │
-│  │  fact_movies            dim_genres                                   │  │
-│  │    movie_sk (PK)          genre_sk (PK)                             │  │
-│  │    date_sk (FK)           genre_id                                   │  │
-│  │    genre_sk (FK)          genre_name                                 │  │
-│  │    company_sk (FK)                                                   │  │
-│  │    revenue_usd          dim_dates                                    │  │
-│  │    budget_usd             date_sk (PK)                               │  │
-│  │    profit_usd             full_date                                  │  │
-│  │    roi_pct                year / quarter / month                     │  │
-│  │    vote_average           day_of_week                                │  │
-│  │    vote_count             is_weekend                                 │  │
-│  │    popularity                                                        │  │
-│  │                         dim_production_companies                     │  │
-│  │  KPI MARTS               company_sk (PK)                            │  │
-│  │  ─────────────────────   company_name                               │  │
-│  │  kpi_genre_performance   origin_country                              │  │
-│  │  kpi_yearly_trends                                                   │  │
-│  │  kpi_top_movies                                                      │  │
-│  │                                                                      │  │
-│  │  Purpose: Business answers, BI-tool ready, aggregated KPIs.          │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------------------+
+|                         ORCHESTRATION LAYER (Dagster)                       |
+|                                                                             |
+|   orchestration/movies_pipeline.py                                          |
+|                                                                             |
+|   Asset Graph (http://localhost:3000):                                      |
+|                                                                             |
+|   [ingestion]          [bronze]           [silver]          [gold/marts]   |
+|   raw_movies_bronze --> bronze_movies_raw --> silver_*  --> dim_*          |
+|         |               (dbt asset)          (dbt assets)   fact_movies    |
+|         |                                                    kpi_*         |
+|         |                                     [transformation]             |
+|         |                                     snapshot_scd2               |
+|         |                                          |                       |
+|         |                                     [validation]                 |
+|         +----------------------------------------> data_quality_tests      |
+|                                                                             |
+|   Jobs:    full_movies_pipeline  (ingest + dbt + snapshot + test)          |
+|            dbt_refresh_only      (dbt + snapshot + test, no API call)      |
+|   Schedule: daily at 06:00 UTC                                              |
++-----------------------------------------------------------------------------+
+                          |
+                          | subprocess (sys.executable -m src.main)
+                          v
++-----------------------------------------------------------------------------+
+|                     INGESTION LAYER  (Python)                               |
+|                                                                             |
+|   src/                                                                      |
+|   +-- config.py      <- Loads .env, validates credentials                  |
+|   +-- extract.py     <- TMDbExtractor: pagination, retry, rate-limit       |
+|   +-- load.py        <- SnowflakeLoader: connection, bulk insert           |
+|   `-- main.py        <- Orchestrates extract -> load pipeline              |
+|                                                                             |
+|   Key patterns: tenacity retries, structured logging, batch inserts        |
++-----------------------------------------------------------------------------+
+                          |  snowflake-connector-python
+                          v
++-----------------------------------------------------------------------------+
+|                   SNOWFLAKE  (LECTURE_DE database)                         |
+|                                                                             |
+|  +------------------------------------------------------------------------+ |
+|  |  BRONZE SCHEMA  (Raw Ingestion Zone)                                   | |
+|  |                                                                        | |
+|  |  RAW_MOVIES                    RAW_GENRES                              | |
+|  |  ----------------------------  -------------------                     | |
+|  |  movie_id    NUMBER            raw_data   VARIANT                      | |
+|  |  raw_data    VARIANT           ingested_at TIMESTAMP                   | |
+|  |  source_url  VARCHAR           batch_id    VARCHAR                     | |
+|  |  ingested_at TIMESTAMP                                                 | |
+|  |  batch_id    VARCHAR                                                   | |
+|  |                                                                        | |
+|  |  Materialization: TABLE                                                | |
+|  |  Purpose: Immutable landing zone. VARIANT = schema-on-read.           | |
+|  +------------------------------------------------------------------------+ |
+|                              | dbt ref()                                    |
+|                              v                                              |
+|  +------------------------------------------------------------------------+ |
+|  |  SILVER SCHEMA  (Cleansed & Structured)                                | |
+|  |                                                                        | |
+|  |  silver_movies           silver_genres       silver_movie_genres       | |
+|  |  --------------------    ---------------     --------------------      | |
+|  |  movie_id  PK            genre_id  PK        movie_id  FK             | |
+|  |  title                   genre_name          genre_id  FK             | |
+|  |  release_date (DATE)                                                   | |
+|  |  budget_usd (NULL=unreported)  silver_production_companies             | |
+|  |  revenue_usd               -------------------------                   | |
+|  |  vote_average               company_id  PK                            | |
+|  |  popularity_score           company_name                              | |
+|  |  runtime_minutes            origin_country                            | |
+|  |  original_language                                                     | |
+|  |  status                  silver_movie_companies                        | |
+|  |  roi_pct                 -------------------------                     | |
+|  |  _loaded_at              movie_id  FK                                  | |
+|  |  _source                 company_id  FK                                | |
+|  |                          company_position                              | |
+|  |                          is_primary_company                            | |
+|  |                                                                        | |
+|  |  Materialization: INCREMENTAL (merge on movie_id)                     | |
+|  |  Purpose: Type-safe, deduplicated, analytics-ready.                   | |
+|  +------------------------------------------------------------------------+ |
+|                   |                         |                               |
+|            dbt snapshot                  dbt ref()                          |
+|                   v                         v                               |
+|  +-------------------+   +---------------------------------------------------------+
+|  |  DBT_STAGING       |   |  GOLD SCHEMA  (Star Schema + KPI Marts)                |
+|  |  (SCD2 History)    |   |                                                         |
+|  |                   |   |  DIMENSIONS                   FACT                      |
+|  |  snap_silver_movies|   |  --------------------  -------------------------------- |
+|  |  -- movie_id       |   |  dim_genres            fact_movies                     |
+|  |  -- dbt_valid_from |   |    genre_sk (PK)         movie_sk (PK, SK)             |
+|  |  -- dbt_valid_to   |   |    genre_id              movie_id (NK)                 |
+|  |  -- budget_usd     |   |    genre_name            date_sk (FK -> dim_dates)     |
+|  |  -- revenue_usd    |   |    genre_group           genre_sk (FK -> dim_genres)   |
+|  |  -- vote_average   |   |    is_blockbuster_genre  company_sk (FK -> dim_companies)
+|  |  -- popularity     |   |                          revenue_usd                   |
+|  |  -- status         |   |  dim_dates               budget_usd                   |
+|  |                   |   |    date_sk (PK=YYYYMMDD)  profit_usd                   |
+|  |  snap_dim_genres  |   |    full_date              roi_pct                      |
+|  |  -- genre_id       |   |    calendar_year          vote_average                 |
+|  |  -- dbt_valid_from |   |    calendar_month         vote_count                   |
+|  |  -- dbt_valid_to   |   |    release_season         popularity_score             |
+|  |  -- genre_name     |   |                          profitability_flag            |
+|  |  -- genre_group    |   |  dim_production_companies                              |
+|  |                   |   |    company_sk (PK)                                      |
+|  |  dbt_run_log      |   |    company_id                                           |
+|  |  (audit log)      |   |    company_name                                         |
+|  |  dbt_model_log    |   |    studio_tier                                          |
+|  |  (per-model log)  |   |    region                                               |
+|  +-------------------+   |                                                         |
+|                           |  KPI MARTS (pre-aggregated, one table = one question)  |
+|                           |  -------------------------------------------------------
+|                           |  kpi_genre_performance  <- genre ROI / revenue / rating|
+|                           |  kpi_yearly_trends      <- YoY industry trends         |
+|                           |  kpi_top_movies         <- multi-metric rankings       |
+|                           |                                                         |
+|                           |  Materialization: TABLE                                |
+|                           |  Post-hook: log_model_run() -> dbt_model_log          |
+|                           |  On-run-end: GRANT SELECT ON GOLD TO ANALYST_ROLE     |
+|                           +---------------------------------------------------------+
++-----------------------------------------------------------------------------+
 
 ================================================================================
   DATA FLOW SUMMARY
 ================================================================================
 
-  [TMDb API] ──HTTP──► [Python extract.py]
-                              │
-                              ▼
-                    [Python load.py] ──SQL──► [BRONZE.RAW_MOVIES]
-                                                      │
-                                              dbt run (bronze models)
-                                                      │
-                                                      ▼
-                                             [SILVER.silver_movies]
-                                             [SILVER.silver_genres]
-                                             [SILVER.silver_movie_genres]
-                                             [SILVER.silver_production_companies]
-                                                      │
-                                              dbt run (gold models)
-                                                      │
-                                                      ▼
-                                             [GOLD.fact_movies]
-                                             [GOLD.dim_genres]
-                                             [GOLD.dim_dates]
-                                             [GOLD.dim_production_companies]
-                                             [GOLD.kpi_genre_performance]
-                                             [GOLD.kpi_yearly_trends]
-                                             [GOLD.kpi_top_movies]
-                                                      │
-                                              dbt test (schema + custom)
-                                                      │
-                                                      ▼
-                                          [BI Tool / Analyst Queries]
+  [TMDb API] --HTTPS--> [Python extract.py]
+                                |
+                                v
+                     [Python load.py] --SQL--> [BRONZE.RAW_MOVIES]
+                                                       |
+                                           dbt run (bronze models)
+                                                       |
+                                                       v
+                                              [SILVER.silver_movies]
+                                              [SILVER.silver_genres]
+                                              [SILVER.silver_movie_genres]
+                                              [SILVER.silver_movie_companies]
+                                              [SILVER.silver_production_companies]
+                                                       |
+                                             dbt snapshot (SCD2)
+                                                       |
+                                              [DBT_STAGING.snap_silver_movies]
+                                              [DBT_STAGING.snap_dim_genres]
+                                                       |
+                                           dbt run (gold + marts models)
+                                                       |
+                                                       v
+                                              [GOLD.dim_dates]
+                                              [GOLD.dim_genres]
+                                              [GOLD.dim_production_companies]
+                                              [GOLD.fact_movies]
+                                              [GOLD.kpi_genre_performance]
+                                              [GOLD.kpi_yearly_trends]
+                                              [GOLD.kpi_top_movies]
+                                                       |
+                                        dbt test (schema + dbt_expectations + SQL)
+                                                       |
+                                                       v
+                                           [BI Tool / Analyst Queries]
+
+  Dagster wraps the entire flow above into a scheduled asset graph.
+  UI: http://localhost:3000  |  Schedule: daily at 06:00 UTC
 
 ================================================================================
-  WAREHOUSE ARCHITECTURE
+  SNOWFLAKE RESOURCE SUMMARY
 ================================================================================
 
   ACCOUNT:      <your_account>.snowflakecomputing.com
   DATABASE:     LECTURE_DE
-  SCHEMAS:      BRONZE | SILVER | GOLD
-  WAREHOUSES:   LECTURE_INGEST_WH (Python loads) XS
-                LECTURE_TRANSFORM_WH (dbt runs)   S
+  SCHEMAS:      BRONZE       -- raw VARIANT ingestion
+                SILVER       -- parsed, typed, incremental models
+                GOLD         -- star schema dims + facts + KPI marts
+                DBT_STAGING  -- SCD2 snapshot tables + audit log tables
+  WAREHOUSES:   LECTURE_INGEST_WH  (Python loads)      XS
+                LECTURE_TRANSFORM_WH  (dbt runs)        S
   ROLES:        SYSADMIN
-                DE_ROLE          (data engineers)
-                ANALYST_ROLE     (read-only Gold)
+                DE_ROLE          (data engineers -- runs dbt, Python)
+                ANALYST_ROLE     (read-only on GOLD -- BI tools)
+
+================================================================================
+  dbt PROJECT STRUCTURE SUMMARY
+================================================================================
+
+  dbt_project/
+  +-- models/
+  |   +-- bronze/     TABLE       -- bronze_movies_raw
+  |   +-- silver/     INCREMENTAL -- silver_movies, silver_genres,
+  |   |                              silver_movie_genres, silver_movie_companies,
+  |   |                              silver_production_companies
+  |   +-- gold/       TABLE       -- dim_dates, dim_genres,
+  |   |                              dim_production_companies, fact_movies
+  |   `-- marts/      TABLE       -- kpi_genre_performance, kpi_yearly_trends,
+  |                                  kpi_top_movies
+  |
+  +-- snapshots/      SCD TYPE 2  -- snap_silver_movies, snap_dim_genres
+  |                   (target: DBT_STAGING schema)
+  |
+  +-- macros/
+  |   +-- generate_schema_name.sql    -- dev vs prod schema routing
+  |   +-- generate_surrogate_key.sql  -- SK + date_sk helpers
+  |   +-- standardize_date.sql        -- safe date conversion, seasons, fiscal year
+  |   `-- audit_logging.sql           -- run log, model log, GRANT macros (hooks)
+  |
+  +-- tests/          CUSTOM SQL  -- 3 business-rule assertions
+  `-- seeds/          CSV         -- budget_tiers reference data
 
 ================================================================================

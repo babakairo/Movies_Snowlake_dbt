@@ -1,11 +1,12 @@
 # =============================================================================
-# dbt_project.yml — dbt Project Configuration
+# dbt_project.yml -- dbt Project Configuration
 # =============================================================================
 # TEACHING NOTE:
 #   This is dbt's "manifest" file. It defines:
 #     1. Project name and paths (where to find models, tests, etc.)
 #     2. Default materialization strategies per layer
 #     3. Model-level variable overrides
+#     4. Hooks -- SQL that runs automatically before/after pipeline runs
 #
 #   The most important concept here is MATERIALIZATION:
 #     - view:        dbt creates a SQL VIEW (no data stored; re-queries source every time)
@@ -14,10 +15,10 @@
 #     - ephemeral:   dbt inlines the SQL as a CTE (no Snowflake object created)
 #
 #   Best practice per layer:
-#     Bronze  → table (raw data, needs to persist; queried by Silver)
-#     Silver  → incremental (grows over time; don't re-process historical data)
-#     Gold    → table (BI tools need fast, pre-materialized data)
-#     KPI     → table (small, aggregated; always fast)
+#     Bronze  -> table      (raw data, needs to persist; queried by Silver)
+#     Silver  -> incremental (grows over time; don't re-process historical data)
+#     Gold    -> table      (BI tools need fast, pre-materialized data)
+#     Marts   -> table      (KPI aggregations; small and business-facing)
 # =============================================================================
 
 name: movies_platform
@@ -29,7 +30,7 @@ config-version: 2
 profile: movies_platform
 
 # These are the paths dbt looks in for different asset types.
-# Changing defaults is unusual — match these to your actual folder structure.
+# Changing defaults is unusual -- match these to your actual folder structure.
 model-paths:       ["models"]
 analysis-paths:    ["analyses"]
 test-paths:        ["tests"]
@@ -49,11 +50,54 @@ clean-targets:
   - "dbt_packages"
 
 # =============================================================================
-# Variables — reusable values across models
+# Hooks -- SQL statements that run automatically at specific pipeline points
+# =============================================================================
+# TEACHING NOTE -- WHY HOOKS MATTER IN PRODUCTION:
+#
+#   Without hooks, every dbt run requires manual steps:
+#     [!] Manually create audit log tables before each run
+#     [!] Manually grant ANALYST_ROLE access to every new table created
+#     [!] No automatic visibility into which models ran or how long they took
+#
+#   With hooks, all of this is automatic:
+#     [+] Audit tables created on first run (IF NOT EXISTS = idempotent)
+#     [+] ANALYST_ROLE gets access to new tables after every successful run
+#     [+] Per-model execution recorded for observability and debugging
+#
+# HOOK EXECUTION ORDER (within one dbt run):
+#   1. on-run-start  -> runs ONCE before any models start
+#   2. pre-hook      -> runs before EACH individual model (configured per-layer)
+#   3. [model builds]
+#   4. post-hook     -> runs after EACH individual model
+#   5. on-run-end    -> runs ONCE after ALL models finish (success or failure)
+#
+# NOTE ON PERMISSIONS:
+#   grant_analyst_role_access() requires DE_ROLE to have GRANT OPTION.
+#   If you see "Insufficient privileges", ask your DBA to run:
+#     GRANT GRANT OPTION FOR PRIVILEGE USAGE ON SCHEMA LECTURE_DE.GOLD TO ROLE DE_ROLE;
+# =============================================================================
+
+on-run-start:
+  # Step 1: Create audit tables (IF NOT EXISTS -- safe to re-run every time)
+  - "{{ create_audit_log_tables() }}"
+  - "{{ create_model_log_table() }}"
+  # Step 2: Record that this pipeline run has started
+  - "{{ log_run_start() }}"
+
+on-run-end:
+  # Step 1: Update the run log with completion status + model counts
+  - "{{ log_run_end() }}"
+  # Step 2: Grant ANALYST_ROLE access to all new tables built this run
+  # TEACHING: This ensures BI tools see new tables without manual GRANT statements
+  - "{{ grant_analyst_role_access() }}"
+
+# =============================================================================
+# Variables -- reusable values across models
 # =============================================================================
 # TEACHING NOTE:
 #   Use vars for values that change between environments (dev vs. prod)
 #   or that you want to make configurable without editing SQL.
+#   Access in models: {{ var('incremental_lookback_days') }}
 vars:
   # How far back to look for "new" data in incremental models
   incremental_lookback_days: 3
@@ -62,12 +106,12 @@ vars:
   date_spine_end: '2030-12-31'
 
 # =============================================================================
-# Model Configuration — per-folder defaults
+# Model Configuration -- per-folder defaults
 # =============================================================================
 models:
   movies_platform:
 
-    # ── Bronze Layer ──────────────────────────────────────────────────────────
+    # -- Bronze Layer ----------------------------------------------------------
     # TEACHING NOTE:
     #   Bronze models are TABLES because:
     #     - They are the source of truth for Silver; Silver models ref() Bronze
@@ -79,7 +123,7 @@ models:
       +schema: BRONZE
       +tags: ["bronze", "raw"]
 
-    # ── Silver Layer ──────────────────────────────────────────────────────────
+    # -- Silver Layer ----------------------------------------------------------
     # TEACHING NOTE:
     #   Silver models are INCREMENTAL because:
     #     - Over weeks/months, you'll have millions of movies
@@ -92,18 +136,44 @@ models:
       +tags: ["silver", "cleansed"]
       +incremental_strategy: merge
 
-    # ── Gold Layer ─────────────────────────────────────────────────────────────
+    # -- Gold Layer ------------------------------------------------------------
     # TEACHING NOTE:
-    #   Gold tables are read by BI tools (Tableau, Looker, Power BI).
-    #   They should always be fully-materialized tables — views are too slow
-    #   when a dashboard runs a complex join on VARIANT columns.
+    #   Gold tables (dims + fact) are read by BI tools (Tableau, Power BI).
+    #   They are the star schema -- fully-materialized for fast analytical queries.
+    #
+    #   post-hook: After each Gold model builds, record execution in the audit
+    #   log table created by on-run-start. Gives per-model pipeline visibility.
     gold:
       +materialized: table
       +schema: GOLD
       +tags: ["gold", "analytics"]
+      +post-hook: "{{ log_model_run(this) }}"
+
+    # -- Marts Layer -----------------------------------------------------------
+    # TEACHING NOTE:
+    #   Marts = Business-facing, pre-aggregated KPI tables.
+    #   They sit ABOVE gold and answer specific business questions directly.
+    #   One mart = one dashboard section or business report.
+    #
+    #   Materialization options for Marts (explained in individual model files):
+    #   -------------------------------------------------------------------------
+    #   'table'         -> Full rebuild every dbt run (used here -- most compatible)
+    #   'view'          -> Recomputes on every dashboard query (only for tiny facts)
+    #   'dynamic_table' -> Snowflake auto-refreshes when source changes
+    #                      Requires Snowflake Enterprise. Config example:
+    #                        materialized='dynamic_table',
+    #                        target_lag='1 day',
+    #                        snowflake_warehouse='LECTURE_TRANSFORM_WH'
+    #
+    #   post-hook: Same per-model audit logging as the gold layer.
+    marts:
+      +materialized: table
+      +schema: GOLD
+      +tags: ["gold", "marts", "kpi"]
+      +post-hook: "{{ log_model_run(this) }}"
 
 # =============================================================================
-# Seeds configuration — static reference data loaded from CSV
+# Seeds configuration -- static reference data loaded from CSV
 # =============================================================================
 seeds:
   movies_platform:

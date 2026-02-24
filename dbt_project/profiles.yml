@@ -1,18 +1,18 @@
 # =============================================================================
-# profiles.yml — Snowflake Connection Profiles
+# profiles.yml -- Snowflake Connection Profiles
 # =============================================================================
 # TEACHING NOTE:
 #   profiles.yml lives in ~/.dbt/profiles.yml (your HOME directory, NOT the project).
-#   This is intentional — it keeps credentials out of version control.
+#   This is intentional -- it keeps credentials out of version control.
 #   The project's dbt_project.yml references the profile by NAME ("movies_platform").
 #
 #   Copy this file to ~/.dbt/profiles.yml and fill in your actual credentials.
 #   NEVER commit this file with real passwords to Git.
 #
 #   Environments (targets):
-#     dev:  individual developer sandbox — uses a personal schema so devs
+#     dev:  individual developer sandbox -- uses a personal schema so devs
 #           don't overwrite each other's work
-#     prod: production run — writes to the real BRONZE/SILVER/GOLD schemas
+#     prod: production run -- writes to the real BRONZE/SILVER/GOLD schemas
 #
 #   dbt uses `target: dev` by default.
 #   Override with: dbt run --target prod
@@ -23,7 +23,7 @@ movies_platform:
 
   outputs:
 
-    # ── Development Environment ───────────────────────────────────────────────
+    # -- Development Environment -----------------------------------------------
     # TEACHING NOTE:
     #   Each developer uses their own schema (e.g., DEV_JOHN_BRONZE).
     #   This prevents one developer's experiments from breaking another's queries.
@@ -41,7 +41,7 @@ movies_platform:
       client_session_keep_alive: false
       query_tag: dbt_dev_run
 
-    # ── Production Environment ────────────────────────────────────────────────
+    # -- Production Environment ------------------------------------------------
     # Run with: dbt run --target prod
     prod:
       type: snowflake

@@ -1,40 +1,90 @@
+
 {{
     config(
         materialized = 'table',
         schema       = 'GOLD',
-        tags         = ['gold', 'kpi', 'mart']
+        tags         = ['gold', 'marts', 'kpi']
     )
 }}
 
 /*
 =============================================================================
   MODEL: kpi_genre_performance
-  LAYER: Gold (KPI Mart)
+  LAYER: Marts (Business-Facing KPI Layer)
   SOURCE: {{ ref('fact_movies') }}, {{ ref('dim_genres') }}
 =============================================================================
-TEACHING NOTE — KPI Marts vs Raw Fact Tables:
+TEACHING NOTE — Marts Layer vs Gold Layer
 
-  Analysts COULD query fact_movies directly for every report.
-  But:
-    - Complex aggregations run on every dashboard refresh (expensive)
-    - Different analysts may write the same aggregation DIFFERENTLY (inconsistency)
-    - BI tools are faster when reading pre-aggregated tables (less computation)
+  WHY HAVE A SEPARATE MARTS LAYER?
+  ─────────────────────────────────────────────────────────────────────────
+  Gold Layer (dim_* + fact_*) = Star Schema
+    - Normalized for analytical flexibility
+    - Built for joining — one fact table joins to any dimension
+    - Optimized for OLAP: any slice/dice/pivot by analysts
 
-  KPI Mart solution:
-    - Pre-aggregate ONCE during the dbt run
-    - Dashboards SELECT from this mart — simple, fast, consistent
-    - Single source of truth for "What is the revenue by genre?" answer
+  Marts Layer (kpi_*) = Pre-Aggregated Business Views
+    - Denormalized for specific business questions
+    - Built for dashboards — one table = one dashboard panel
+    - Optimized for BI: minimal SQL in the BI tool, just SELECT
 
-  This mart answers business questions like:
+  The marts layer sits ABOVE gold and answers specific business questions:
+    "What is genre performance this year?" → kpi_genre_performance
+    "What are yearly industry trends?"     → kpi_yearly_trends
+    "What are the top movies?"             → kpi_top_movies
+
+  MATERIALIZATION OPTIONS FOR MARTS:
+  ─────────────────────────────────────────────────────────────────────────
+  Current: materialized='table'
+    - Full rebuild every dbt run
+    - Best for: teaching, small marts (<1M rows), infrequent BI queries
+
+  Alternative 1: materialized='view'
+    - No data stored; SQL re-runs on every dashboard refresh
+    - Best for: real-time data, small fact tables, <10 BI users
+    - Warning: complex aggregations are SLOW on views for large fact tables
+
+  Alternative 2: Snowflake Dynamic Table (Snowflake Enterprise+)
+    ────────────────────────────────────────────────────────────────────
+    TEACHING: {%- raw %} and {% endraw -%} tell dbt's Jinja engine to treat
+    the block as plain text, so example config() calls inside comments
+    are not parsed as real dbt directives.
+{%- raw %}
+    {{ config(
+        materialized = 'dynamic_table',
+        target_lag   = '1 day',               -- Max staleness
+        snowflake_warehouse = 'LECTURE_TRANSFORM_WH'
+    ) }}
+{%- endraw %}
+    ────────────────────────────────────────────────────────────────────
+    - Snowflake automatically refreshes when source data changes
+    - Best for: production marts needing freshness without scheduled runs
+    - Supports full SQL including JOINs, subqueries, window functions
+
+  Alternative 3: Snowflake Materialized View
+    ────────────────────────────────────────────────────────────────────
+{%- raw %}
+    {{ config(materialized = 'materialized_view') }}
+{%- endraw %}
+    ────────────────────────────────────────────────────────────────────
+    - Auto-refreshed by Snowflake, but LIMITED SQL support:
+      ❌ No GROUP BY + aggregate
+      ❌ No JOINs
+      ❌ No Window functions (RANK, LAG, etc.)
+    - Only useful for simple projections/filters — NOT these KPI models
+
+  RECOMMENDATION FOR PRODUCTION:
+    Use 'dynamic_table' for KPIs. It gives you:
+    ✅ Auto-refresh   ✅ Full SQL   ✅ Snowflake manages compute cost
+
+  This model answers:
     Q: "Which genre generates the highest average ROI?"
     Q: "How many Action movies were released vs Drama?"
     Q: "Which genre has the most consistent quality (lowest rating std dev)?"
     Q: "Which genre dominates blockbuster productions ($100M+ budget)?"
 
 AGGREGATION RULES:
-  We use ONLY movies with known budget AND revenue for ROI metrics
-  (otherwise we'd compare movies with data against movies without — unfair).
-  But for count/rating metrics, we include ALL movies.
+  Financial metrics: only movies with known budget AND revenue (non-zero)
+  Volume/quality metrics: all movies in that genre
 =============================================================================
 */
 

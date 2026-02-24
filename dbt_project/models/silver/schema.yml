@@ -1,14 +1,46 @@
 version: 2
 
+# =============================================================================
+# TEACHING NOTE -- Silver Layer Schema Tests
+# =============================================================================
+# Silver layer = cleansed, typed, parsed data. One row per business entity.
+# Tests here validate the QUALITY of data transformation from Bronze.
+#
+# Test categories used:
+#   1. not_null / unique         -- fundamental data quality
+#   2. relationships             -- FK integrity between silver tables
+#   3. accepted_values           -- categorical column validation
+#   4. dbt_expectations          -- advanced range and statistical tests
+#
+# TEACHING PATTERN: Why test at the Silver layer?
+#   Bronze holds raw JSON -- hard to validate VARIANT columns directly.
+#   Silver has TYPED, PARSED columns -> easy to test ranges, FK relationships.
+#   Testing silver catches data quality issues BEFORE they corrupt Gold/Marts.
+#
+# dbt_expectations tests used here:
+#   expect_column_values_to_be_between   -> validate numeric column ranges
+#   expect_table_row_count_to_be_between -> sanity-check total row counts
+# =============================================================================
+
 models:
+
+  # -- silver_movies ----------------------------------------------------------
   - name: silver_movies
     description: >
       Cleansed and typed movie records parsed from the Bronze VARIANT column.
       One row per movie. Budget/revenue zeros are treated as NULL (TMDb convention).
-      Incremental — new rows merged on movie_id on each dbt run.
+      Incremental -- new rows merged on movie_id on each dbt run.
+      SCD2 history of financial/quality changes tracked via snap_silver_movies snapshot.
+
+    tests:
+      # TEACHING: Table-level test -- at least some movies should exist
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 1000000
+
     columns:
       - name: movie_id
-        description: TMDb numeric movie ID — primary key
+        description: TMDb numeric movie ID -- primary key
         tests:
           - not_null
           - unique
@@ -24,35 +56,62 @@ models:
       - name: release_year
         description: Calendar year extracted from release_date
         tests:
+          # TEACHING: dbt_expectations range check -- rejects clearly wrong years
+          # 1888 = first film ever made (Roundhay Garden Scene)
           - dbt_expectations.expect_column_values_to_be_between:
-              arguments:
-                min_value: 1888
-                max_value: 2030
-                row_condition: "release_year is not null"
+              min_value: 1888
+              max_value: 2030
+              row_condition: "release_year is not null"
 
-      - name: budget_usd
-        description: Production budget in USD — NULL if not reported (TMDb uses 0 for unknown)
-
-      - name: revenue_usd
-        description: Worldwide box office revenue in USD — NULL if not reported
-
-      - name: runtime_minutes
-        description: Film runtime in minutes — NULL if not known
+      - name: release_month
+        description: Month number (1-12) extracted from release_date
         tests:
           - dbt_expectations.expect_column_values_to_be_between:
-              arguments:
-                min_value: 1
-                max_value: 600
-                row_condition: "runtime_minutes is not null"
+              min_value: 1
+              max_value: 12
+              row_condition: "release_month is not null"
+
+      - name: budget_usd
+        description: Production budget in USD -- NULL if not reported (TMDb uses 0 for unknown)
+        tests:
+          # Budget should never be negative if it is reported
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 1000000000
+              row_condition: "budget_usd is not null"
+
+      - name: revenue_usd
+        description: Worldwide box office revenue in USD -- NULL if not reported
+        tests:
+          # Revenue must be non-negative if reported
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 5000000000
+              row_condition: "revenue_usd is not null"
+
+      - name: runtime_minutes
+        description: Film runtime in minutes -- NULL if not known
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 1
+              max_value: 600
+              row_condition: "runtime_minutes is not null"
 
       - name: vote_average
         description: TMDb community average rating on a 0-10 scale
         tests:
           - dbt_expectations.expect_column_values_to_be_between:
-              arguments:
-                min_value: 0
-                max_value: 10
-                row_condition: "vote_average is not null"
+              min_value: 0
+              max_value: 10
+              row_condition: "vote_average is not null"
+
+      - name: vote_count
+        description: Number of TMDb user votes -- must be non-negative
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 10000000
+              row_condition: "vote_count is not null"
 
       - name: roi_pct
         description: >
@@ -67,13 +126,22 @@ models:
               arguments:
                 values: ['TMDb API v3']
 
+  # -- silver_genres ----------------------------------------------------------
   - name: silver_genres
     description: >
       Reference dimension of TMDb movie genres. Loaded from the most recent
-      RAW_GENRES snapshot. Genres rarely change — ~19 genres total.
+      RAW_GENRES snapshot. Genres rarely change -- ~19 genres total.
+      Source for dim_genres gold model and snap_dim_genres snapshot.
+
+    tests:
+      # TMDb has ~19 stable genres -- alert if this changes significantly
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 10
+          max_value: 30
+
     columns:
       - name: genre_id
-        description: TMDb genre ID — primary key
+        description: TMDb genre ID -- primary key
         tests:
           - not_null
           - unique
@@ -84,10 +152,13 @@ models:
           - not_null
           - unique
 
+  # -- silver_movie_genres ----------------------------------------------------
   - name: silver_movie_genres
     description: >
       Bridge table mapping movies to their genres. One row per movie-genre
       combination. A movie with 3 genres has 3 rows in this table.
+      Many-to-many relationship between movies and genres.
+
     columns:
       - name: movie_id
         description: FK to silver_movies
@@ -107,13 +178,16 @@ models:
                 to: ref('silver_genres')
                 field: genre_id
 
+  # -- silver_production_companies --------------------------------------------
   - name: silver_production_companies
     description: >
       Reference dimension of unique production companies extracted from movie
       JSON arrays. One row per company_id. Multiple movies may share a company.
+      Source for dim_production_companies gold model.
+
     columns:
       - name: company_id
-        description: TMDb company ID — primary key
+        description: TMDb company ID -- primary key
         tests:
           - not_null
           - unique
@@ -126,11 +200,13 @@ models:
       - name: origin_country
         description: ISO 3166-1 alpha-2 country code (e.g., US, GB, JP)
 
+  # -- silver_movie_companies -------------------------------------------------
   - name: silver_movie_companies
     description: >
       Bridge table mapping movies to their production companies. One row per
       movie-company combination. is_primary_company=true marks the first-listed
       (index 0) company in the TMDb production_companies array.
+
     columns:
       - name: movie_id
         description: TMDb movie ID
@@ -144,6 +220,12 @@ models:
 
       - name: company_position
         description: Zero-based position in the production_companies array
+        tests:
+          # TEACHING: Position index is always 0 or higher -- never negative
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              max_value: 50
+              row_condition: "company_position is not null"
 
       - name: is_primary_company
         description: True for the first company listed (position = 0)

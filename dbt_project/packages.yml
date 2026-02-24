@@ -1,14 +1,14 @@
 # =============================================================================
-# packages.yml — dbt Package Dependencies
+# packages.yml -- dbt Package Dependencies
 # =============================================================================
 # TEACHING NOTE:
 #   dbt packages are reusable libraries of macros, models, and tests.
-#   Think of them like Python's pip packages — shared, versioned code.
+#   Think of them like Python's pip packages -- shared, versioned code.
 #
 #   Install with: dbt deps
 #
 #   Key packages used here:
-#     dbt-utils:  Utility macros — date_spine, surrogate_key, etc.
+#     dbt-utils:  Utility macros -- date_spine, surrogate_key, etc.
 #     dbt-expectations: Advanced data quality tests beyond built-in ones
 #                       (e.g., expect_column_values_to_be_between)
 # =============================================================================

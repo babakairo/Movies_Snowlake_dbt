@@ -1,0 +1,41 @@
+# =============================================================================
+# dagster.yaml — Dagster Instance Configuration
+# =============================================================================
+# TEACHING NOTE:
+#   This file configures the Dagster INSTANCE (the background server that
+#   stores run history, schedules, and logs).
+#
+#   For local development (teaching), we use local SQLite storage.
+#   In production, you'd point these to a PostgreSQL database.
+#
+#   Run `dagster dev -f movies_pipeline.py` from this directory.
+#   The web UI opens at http://localhost:3000
+# =============================================================================
+
+# Run storage: where run history is saved
+run_storage:
+  module: dagster.core.storage.runs
+  class: SqliteRunStorage
+  config:
+    base_dir: ".dagster_home/runs"
+
+# Event log storage: where per-run logs and asset events are saved
+event_log_storage:
+  module: dagster.core.storage.event_log
+  class: SqliteEventLogStorage
+  config:
+    base_dir: ".dagster_home/events"
+
+# Schedule storage: where cron schedules and ticks are persisted
+schedule_storage:
+  module: dagster.core.storage.schedules
+  class: SqliteScheduleStorage
+  config:
+    base_dir: ".dagster_home/schedules"
+
+# Compute log manager: where stdout/stderr from assets is saved
+compute_logs:
+  module: dagster.core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir: ".dagster_home/compute_logs"
