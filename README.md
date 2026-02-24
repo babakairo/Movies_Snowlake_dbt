@@ -668,7 +668,7 @@ dagster asset materialize --select "*" -f movies_pipeline.py
 
 ---
 
-## Next Steps for Students
+## Next Steps 
 
 After completing this project, explore these advanced topics:
 
